@@ -1,0 +1,540 @@
+Index: python/cwiidmodule.c
+===================================================================
+--- python/cwiidmodule.c	(revision 179)
++++ python/cwiidmodule.c	(working copy)
+@@ -96,6 +96,7 @@
+ 	CWIID_CONST_MACRO(RPT_IR),
+ 	CWIID_CONST_MACRO(RPT_NUNCHUK),
+ 	CWIID_CONST_MACRO(RPT_CLASSIC),
++	CWIID_CONST_MACRO(RPT_BALANCE),
+ 	CWIID_CONST_MACRO(RPT_EXT),
+ 	CWIID_CONST_MACRO(LED1_ON),
+ 	CWIID_CONST_MACRO(LED2_ON),
+@@ -153,11 +154,13 @@
+ 	CWIID_CONST_MACRO(MESG_IR),
+ 	CWIID_CONST_MACRO(MESG_NUNCHUK),
+ 	CWIID_CONST_MACRO(MESG_CLASSIC),
++	CWIID_CONST_MACRO(MESG_BALANCE),
+ 	CWIID_CONST_MACRO(MESG_ERROR),
+ 	CWIID_CONST_MACRO(MESG_UNKNOWN),
+ 	CWIID_CONST_MACRO(EXT_NONE),
+ 	CWIID_CONST_MACRO(EXT_NUNCHUK),
+ 	CWIID_CONST_MACRO(EXT_CLASSIC),
++	CWIID_CONST_MACRO(EXT_BALANCE),
+ 	CWIID_CONST_MACRO(EXT_UNKNOWN),
+ 	CWIID_CONST_MACRO(ERROR_DISCONNECT),
+ 	CWIID_CONST_MACRO(ERROR_COMM),
+Index: python/Wiimote.c
+===================================================================
+--- python/Wiimote.c	(revision 179)
++++ python/Wiimote.c	(working copy)
+@@ -84,6 +84,7 @@
+ static PyObject *Wiimote_get_state(Wiimote *self, void *closure);
+ static PyObject *Wiimote_get_acc_cal(Wiimote *self, PyObject *args,
+                                      PyObject *kwds);
++static PyObject *Wiimote_get_balance_cal(Wiimote *self);
+ 
+ static PyObject *Wiimote_request_status(Wiimote *self);
+ static int Wiimote_set_led(Wiimote *self, PyObject *PyLed, void *closure);
+@@ -112,7 +113,10 @@
+ 	{"get_acc_cal", (PyCFunction)Wiimote_get_acc_cal,
+ 	 METH_VARARGS | METH_KEYWORDS,
+ 	 "get_acc_cal(extension) -> calibration tuple\n\n"
+-	 "retrieve calibration information"},
++	 "retrieve accelerometer calibration information"},
++	{"get_balance_cal", (PyCFunction)Wiimote_get_balance_cal, METH_NOARGS,
++	 "get_balance_cal() -> calibration tuple\n\n"
++	 "retrieve Balance Board calibration information"},
+ 	{"request_status", (PyCFunction)Wiimote_request_status, METH_NOARGS,
+ 	 "request_status()\n\nrequest status message"},
+ 	{"read", (PyCFunction)Wiimote_read, METH_VARARGS | METH_KEYWORDS,
+@@ -521,6 +525,32 @@
+ 			Py_DECREF(PyExt);
+ 		}
+ 		break;
++	case CWIID_EXT_BALANCE:
++		if (state.rpt_mode & CWIID_RPT_BALANCE) {
++			PyExt = Py_BuildValue("{s:I,s:I,s:I,s:I}",
++			                      "right_top",
++			                        state.ext.balance.right_top,
++			                      "right_bottom",
++			                        state.ext.balance.right_bottom,
++			                      "left_top",
++			                        state.ext.balance.left_top,
++			                      "left_bottom",
++			                        state.ext.balance.left_bottom);
++
++			if (!PyExt) {
++				Py_DECREF(PyState);
++				return NULL;
++			}
++
++			if (PyDict_SetItemString(PyState, "balance", PyExt)) {
++				Py_DECREF(PyState);
++				Py_DECREF(PyExt);
++				return NULL;
++			}
++
++			Py_DECREF(PyExt);
++		}
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -558,6 +588,36 @@
+ 	return PyAccCal;
+ }
+ 
++static PyObject *Wiimote_get_balance_cal(Wiimote *self)
++{
++	struct balance_cal balance_cal;
++	PyObject *PyBalCal;
++
++	if (cwiid_get_balance_cal(self->wiimote, &balance_cal)) {
++		PyErr_SetString(PyExc_RuntimeError,
++		                "Error getting balance board calibration");
++		return NULL;
++	}
++
++	if (!(PyBalCal = Py_BuildValue("([i,i,i],[i,i,i],[i,i,i],[i,i,i])",
++	                               balance_cal.right_top[0],
++	                               balance_cal.right_top[1],
++	                               balance_cal.right_top[2],
++	                               balance_cal.right_bottom[0],
++	                               balance_cal.right_bottom[1],
++	                               balance_cal.right_bottom[2],
++	                               balance_cal.left_top[0],
++	                               balance_cal.left_top[1],
++	                               balance_cal.left_top[2],
++	                               balance_cal.left_bottom[0],
++	                               balance_cal.left_bottom[1],
++	                               balance_cal.left_bottom[2]))) {
++		return NULL;
++	}
++
++	return PyBalCal;
++}
++
+ static PyObject *Wiimote_request_status(Wiimote *self)
+ {
+ 	if (cwiid_request_status(self->wiimote)) {
+@@ -728,6 +788,10 @@
+  *                               "buttons":buttons},
+  *          (cwiid.CLASSIC_MESG,{"l_stick":(x,y),"r_stick":(x,y),"l":l,"r":r,
+  *                               "buttons":buttons},
++ *          (cwiid.BALANCE_MESG,{"right_top":right_top,
++ *                               "right_bottom":right_bottom,
++ *                               "left_top":left_top,
++ *                               "left_bottom":left_bottom},
+  *          (cwiid.ERROR_MESG,error)]
+  */
+ PyObject *ConvertMesgArray(int mesg_count, union cwiid_mesg mesg[])
+@@ -834,6 +898,17 @@
+ 			             "r", mesg[i].classic_mesg.r,
+ 			             "buttons", mesg[i].classic_mesg.buttons);
+ 			break;
++		case CWIID_MESG_BALANCE:
++			mesgVal = Py_BuildValue("{s:I,s:I,s:I,s:I}",
++			             "right_top",
++			               mesg[i].balance_mesg.right_top,
++			             "right_bottom",
++			               mesg[i].balance_mesg.right_bottom,
++			             "left_top",
++			               mesg[i].balance_mesg.left_top,
++			             "left_bottom",
++			               mesg[i].balance_mesg.left_bottom);
++			break;
+ 		case CWIID_MESG_ERROR:
+ 			mesgVal = Py_BuildValue("i", mesg[i].error_mesg.error);
+ 			break;
+Index: libcwiid/process.c
+===================================================================
+--- libcwiid/process.c	(revision 179)
++++ libcwiid/process.c	(working copy)
+@@ -182,6 +182,7 @@
+ {
+ 	struct cwiid_nunchuk_mesg *nunchuk_mesg;
+ 	struct cwiid_classic_mesg *classic_mesg;
++	struct cwiid_balance_mesg *balance_mesg;
+ 	int i;
+ 
+ 	switch (wiimote->state.ext_type) {
+@@ -224,6 +225,20 @@
+ 			                          (uint16_t)data[5]);
+ 		}
+ 		break;
++	case CWIID_EXT_BALANCE:
++		if (wiimote->state.rpt_mode & CWIID_RPT_BALANCE) {
++			balance_mesg = &ma->array[ma->count++].balance_mesg;
++			balance_mesg->type = CWIID_MESG_BALANCE;
++			balance_mesg->right_top = ((uint16_t)data[0]<<8 |
++			                           (uint16_t)data[1]);
++			balance_mesg->right_bottom = ((uint16_t)data[2]<<8 |
++			                              (uint16_t)data[3]);
++			balance_mesg->left_top = ((uint16_t)data[4]<<8 |
++			                           (uint16_t)data[5]);
++			balance_mesg->left_bottom = ((uint16_t)data[6]<<8 |
++			                              (uint16_t)data[7]);
++		}
++		break;
+ 	}
+ 
+ 	return 0;
+Index: libcwiid/cwiid_internal.h
+===================================================================
+--- libcwiid/cwiid_internal.h	(revision 179)
++++ libcwiid/cwiid_internal.h	(working copy)
+@@ -73,6 +73,7 @@
+ 
+ /* Wiimote specific magic numbers */
+ #define WIIMOTE_NAME "Nintendo RVL-CNT-01"
++#define WIIBALANCE_NAME "Nintendo RVL-WBC-01"
+ #define WIIMOTE_CLASS_0 0x04
+ #define WIIMOTE_CLASS_1 0x25
+ #define WIIMOTE_CLASS_2 0x00
+@@ -114,9 +115,10 @@
+ 
+ /* Extension Values */
+ #define EXT_NONE	0x2E
+-#define EXT_PARTIAL 0xFF
+-#define EXT_NUNCHUK 0x00
+-#define EXT_CLASSIC 0x01
++#define EXT_PARTIAL	0xFF
++#define EXT_NUNCHUK	0x00
++#define EXT_CLASSIC	0x01
++#define EXT_BALANCE	0x2A
+ 
+ /* IR Enable blocks */
+ #define MARCAN_IR_BLOCK_1	"\x00\x00\x00\x00\x00\x00\x90\x00\xC0"
+Index: libcwiid/interface.c
+===================================================================
+--- libcwiid/interface.c	(revision 179)
++++ libcwiid/interface.c	(working copy)
+@@ -179,3 +179,28 @@
+ 
+ 	return 0;
+ }
++
++int cwiid_get_balance_cal(struct wiimote *wiimote,
++                          struct balance_cal *balance_cal)
++{
++	unsigned char buf[24];
++
++	if (cwiid_read(wiimote, CWIID_RW_REG, 0xa40024, 24, buf)) {
++		cwiid_err(wiimote, "Read error (balancecal)");
++		return -1;
++	}
++	balance_cal->right_top[0] = ((uint16_t)buf[0]<<8 | (uint16_t)buf[1]);
++	balance_cal->right_bottom[0] = ((uint16_t)buf[2]<<8 | (uint16_t)buf[3]);
++	balance_cal->left_top[0] = ((uint16_t)buf[4]<<8 | (uint16_t)buf[5]);
++	balance_cal->left_bottom[0] = ((uint16_t)buf[6]<<8 | (uint16_t)buf[7]);
++	balance_cal->right_top[1] = ((uint16_t)buf[8]<<8 | (uint16_t)buf[9]);
++	balance_cal->right_bottom[1] = ((uint16_t)buf[10]<<8 | (uint16_t)buf[11]);
++	balance_cal->left_top[1] = ((uint16_t)buf[12]<<8 | (uint16_t)buf[13]);
++	balance_cal->left_bottom[1] = ((uint16_t)buf[14]<<8 | (uint16_t)buf[15]);
++	balance_cal->right_top[2] = ((uint16_t)buf[16]<<8 | (uint16_t)buf[17]);
++	balance_cal->right_bottom[2] = ((uint16_t)buf[18]<<8 | (uint16_t)buf[19]);
++	balance_cal->left_top[2] = ((uint16_t)buf[20]<<8 | (uint16_t)buf[21]);
++	balance_cal->left_bottom[2] = ((uint16_t)buf[22]<<8 | (uint16_t)buf[23]);
++
++	return 0;
++}
+Index: libcwiid/state.c
+===================================================================
+--- libcwiid/state.c	(revision 179)
++++ libcwiid/state.c	(working copy)
+@@ -75,6 +75,12 @@
+ 			wiimote->state.ext.classic.r = mesg->classic_mesg.r;
+ 			wiimote->state.ext.classic.buttons = mesg->classic_mesg.buttons;
+ 			break;
++		case CWIID_MESG_BALANCE:
++			wiimote->state.ext.balance.right_top = mesg->balance_mesg.right_top;
++			wiimote->state.ext.balance.right_bottom = mesg->balance_mesg.right_bottom;
++			wiimote->state.ext.balance.left_top = mesg->balance_mesg.left_top;
++			wiimote->state.ext.balance.left_bottom = mesg->balance_mesg.left_bottom;
++			break;
+ 		case CWIID_MESG_ERROR:
+ 			wiimote->state.error = mesg->error_mesg.error;
+ 			break;
+@@ -166,6 +172,10 @@
+ 			rpt_type = RPT_EXT21;
+ 		}	
+ 	}
++	else if ((rpt_mode & CWIID_RPT_EXT) &&
++	  wiimote->state.ext_type == CWIID_EXT_BALANCE) {
++		rpt_type = RPT_BTN_EXT8;
++	}
+ 	else {
+ 		if (rpt_mode & CWIID_RPT_IR) {
+ 			rpt_type = RPT_BTN_ACC_IR12;
+@@ -223,6 +233,10 @@
+ 	  (CWIID_RPT_CLASSIC & ~rpt_mode & wiimote->state.rpt_mode)) {
+ 		memset(&wiimote->state.ext, 0, sizeof wiimote->state.ext);
+ 	}
++	else if ((wiimote->state.ext_type == CWIID_EXT_BALANCE) &&
++	  (CWIID_RPT_BALANCE & ~rpt_mode & wiimote->state.rpt_mode)) {
++		memset(&wiimote->state.ext, 0, sizeof wiimote->state.ext);
++	}
+ 
+ 	wiimote->state.rpt_mode = rpt_mode;
+ 
+Index: libcwiid/cwiid.h
+===================================================================
+--- libcwiid/cwiid.h	(revision 179)
++++ libcwiid/cwiid.h	(working copy)
+@@ -75,7 +75,8 @@
+ #define CWIID_RPT_IR		0x08
+ #define CWIID_RPT_NUNCHUK	0x10
+ #define CWIID_RPT_CLASSIC	0x20
+-#define CWIID_RPT_EXT		(CWIID_RPT_NUNCHUK | CWIID_RPT_CLASSIC)
++#define CWIID_RPT_BALANCE	0x40
++#define CWIID_RPT_EXT		(CWIID_RPT_NUNCHUK | CWIID_RPT_CLASSIC | CWIID_RPT_BALANCE)
+ 
+ /* LED flags */
+ #define CWIID_LED1_ON	0x01
+@@ -165,6 +166,7 @@
+ 	CWIID_MESG_IR,
+ 	CWIID_MESG_NUNCHUK,
+ 	CWIID_MESG_CLASSIC,
++	CWIID_MESG_BALANCE,
+ 	CWIID_MESG_ERROR,
+ 	CWIID_MESG_UNKNOWN
+ };
+@@ -173,6 +175,7 @@
+ 	CWIID_EXT_NONE,
+ 	CWIID_EXT_NUNCHUK,
+ 	CWIID_EXT_CLASSIC,
++	CWIID_EXT_BALANCE,
+ 	CWIID_EXT_UNKNOWN
+ };
+ 
+@@ -187,6 +190,13 @@
+ 	uint8_t one[3];
+ };
+ 
++struct balance_cal {
++	uint16_t right_top[3];
++	uint16_t right_bottom[3];
++	uint16_t left_top[3];
++	uint16_t left_bottom[3];
++};
++
+ /* Message Structs */
+ struct cwiid_status_mesg {
+ 	enum cwiid_mesg_type type;
+@@ -231,6 +241,14 @@
+ 	uint16_t buttons;
+ };
+ 
++struct cwiid_balance_mesg {
++	enum cwiid_mesg_type type;
++	uint16_t right_top;
++	uint16_t right_bottom;
++	uint16_t left_top;
++	uint16_t left_bottom;
++};
++
+ struct cwiid_error_mesg {
+ 	enum cwiid_mesg_type type;
+ 	enum cwiid_error error;
+@@ -244,6 +262,7 @@
+ 	struct cwiid_ir_mesg ir_mesg;
+ 	struct cwiid_nunchuk_mesg nunchuk_mesg;
+ 	struct cwiid_classic_mesg classic_mesg;
++	struct cwiid_balance_mesg balance_mesg;
+ 	struct cwiid_error_mesg error_mesg;
+ };
+ 
+@@ -262,9 +281,17 @@
+ 	uint16_t buttons;
+ };
+ 
++struct balance_state {
++	uint16_t right_top;
++	uint16_t right_bottom;
++	uint16_t left_top;
++	uint16_t left_bottom;
++};
++
+ union ext_state {
+ 	struct nunchuk_state nunchuk;
+ 	struct classic_state classic;
++	struct balance_state balance;
+ };
+ 
+ struct cwiid_state {
+@@ -325,6 +352,8 @@
+ int cwiid_get_state(cwiid_wiimote_t *wiimote, struct cwiid_state *state);
+ int cwiid_get_acc_cal(struct wiimote *wiimote, enum cwiid_ext_type ext_type,
+                       struct acc_cal *acc_cal);
++int cwiid_get_balance_cal(struct wiimote *wiimote,
++                          struct balance_cal *balance_cal);
+ 
+ /* Operations */
+ int cwiid_command(cwiid_wiimote_t *wiimote, enum cwiid_command command,
+Index: libcwiid/bluetooth.c
+===================================================================
+--- libcwiid/bluetooth.c	(revision 179)
++++ libcwiid/bluetooth.c	(working copy)
+@@ -131,7 +131,8 @@
+ 
+ 		/* Filter by name */
+ 		if (!(flags & BT_NO_WIIMOTE_FILTER) &&
+-		  strncmp((*bdinfo)[bdinfo_count].name, WIIMOTE_NAME, BT_NAME_LEN)) {
++		  strncmp((*bdinfo)[bdinfo_count].name, WIIMOTE_NAME, BT_NAME_LEN) &&
++		  strncmp((*bdinfo)[bdinfo_count].name, WIIBALANCE_NAME, BT_NAME_LEN)) {
+ 			continue;
+ 		}
+ 
+Index: libcwiid/thread.c
+===================================================================
+--- libcwiid/thread.c	(revision 179)
++++ libcwiid/thread.c	(working copy)
+@@ -216,6 +216,9 @@
+ 					case EXT_CLASSIC:
+ 						status_mesg->ext_type = CWIID_EXT_CLASSIC;
+ 						break;
++					case EXT_BALANCE:
++						status_mesg->ext_type = CWIID_EXT_BALANCE;
++						break;
+ 					default:
+ 						status_mesg->ext_type = CWIID_EXT_UNKNOWN;
+ 						break;
+Index: wmdemo/wmdemo.py
+===================================================================
+--- wmdemo/wmdemo.py	(revision 179)
++++ wmdemo/wmdemo.py	(working copy)
+@@ -26,6 +26,7 @@
+ 
+ 	#Connect to address given on command-line, if present
+ 	print 'Put Wiimote in discoverable mode now (press 1+2)...'
++	global wiimote
+ 	if len(sys.argv) > 1:
+ 		wiimote = cwiid.Wiimote(sys.argv[1])
+ 	else:
+@@ -91,7 +92,7 @@
+ 
+ def print_state(state):
+ 	print 'Report Mode:',
+-	for r in ['STATUS', 'BTN', 'ACC', 'IR', 'NUNCHUK', 'CLASSIC']:
++	for r in ['STATUS', 'BTN', 'ACC', 'IR', 'NUNCHUK', 'CLASSIC', 'BALANCE']:
+ 		if state['rpt_mode'] & eval('cwiid.RPT_' + r):
+ 			print r,
+ 	print
+@@ -142,6 +143,10 @@
+ 		  (state['classic']['buttons'],
+ 		   state['classic']['l_stick'], state['classic']['r_stick'],
+ 		   state['classic']['l'], state['classic']['r'])
++	elif state['ext_type'] == cwiid.EXT_BALANCE:
++		print 'Balance: right_top=%d right_bottom=%d left_top=%d left_bottom=%d' % \
++		  (state['balance']['right_top'], state['balance']['right_bottom'],
++		   state['balance']['left_top'], state['balance']['left_bottom'])
+ 
+ def callback(mesg_list):
+ 	for mesg in mesg_list:
+@@ -154,6 +159,8 @@
+ 				print 'Nunchuk'
+ 			elif mesg[1]['ext_type'] == cwiid.EXT_CLASSIC:
+ 				print 'Classic Controller'
++			elif mesg[1]['ext_type'] == cwiid.EXT_BALANCE:
++				print 'Balance Board'
+ 			else:
+ 				print 'Unknown Extension'
+ 
+@@ -190,6 +197,8 @@
+ 			   state['classic']['l_stick'], state['classic']['r_stick'],
+ 			   state['classic']['l'], state['classic']['r'])
+ 		elif mesg[0] ==  cwiid.MESG_ERROR:
++			print "Error message received"
++			global wiimote
+ 			wiimote.close()
+ 			exit(-1)
+ 		else:
+Index: wmdemo/wmdemo.c
+===================================================================
+--- wmdemo/wmdemo.c	(revision 179)
++++ wmdemo/wmdemo.c	(working copy)
+@@ -124,7 +124,7 @@
+ 			break;
+ 		case 'e':
+ 			/* CWIID_RPT_EXT is actually
+-			 * CWIID_RPT_NUNCHUK | CWIID_RPT_CLASSIC */
++			 * CWIID_RPT_NUNCHUK | CWIID_RPT_CLASSIC | CWIID_RPT_BALANCE */
+ 			toggle_bit(rpt_mode, CWIID_RPT_EXT);
+ 			set_rpt_mode(wiimote, rpt_mode);
+ 			break;
+@@ -215,6 +215,7 @@
+ 	if (state->rpt_mode & CWIID_RPT_IR) printf(" IR");
+ 	if (state->rpt_mode & CWIID_RPT_NUNCHUK) printf(" NUNCHUK");
+ 	if (state->rpt_mode & CWIID_RPT_CLASSIC) printf(" CLASSIC");
++	if (state->rpt_mode & CWIID_RPT_BALANCE) printf(" BALANCE");
+ 	printf("\n");
+ 	
+ 	printf("Active LEDs:");
+@@ -272,6 +273,14 @@
+ 		       state->ext.classic.r_stick[CWIID_Y],
+ 		       state->ext.classic.l, state->ext.classic.r);
+ 		break;
++	case CWIID_EXT_BALANCE:
++		printf("Balance: right_top=%d right_bottom=%d "
++		       "left_top=%d left_bottom=%d\n",
++		       state->ext.balance.right_top,
++		       state->ext.balance.right_bottom,
++		       state->ext.balance.left_top,
++		       state->ext.balance.left_bottom);
++		break;
+ 	}
+ }
+ 
+@@ -290,6 +299,7 @@
+ {
+ 	int i, j;
+ 	int valid_source;
++	struct balance_cal balance_cal;
+ 
+ 	for (i=0; i < mesg_count; i++)
+ 	{
+@@ -307,6 +317,28 @@
+ 			case CWIID_EXT_CLASSIC:
+ 				printf("Classic Controller");
+ 				break;
++			case CWIID_EXT_BALANCE:
++				if(cwiid_get_balance_cal(wiimote, &balance_cal)) {
++					printf("Balance board: Failed to fetch calibration data");
++				}
++				else {
++					printf("Balance board: right_top=(%d,%d,%d), "
++						   "right_bottom=(%d,%d,%d), left_top=(%d,%d,%d), "
++						   "left_bottom=(%d,%d,%d)",
++						   balance_cal.right_top[0],
++						   balance_cal.right_top[1],
++						   balance_cal.right_top[2],
++						   balance_cal.right_bottom[0],
++						   balance_cal.right_bottom[1],
++						   balance_cal.right_bottom[2],
++						   balance_cal.left_top[0],
++						   balance_cal.left_top[1],
++						   balance_cal.left_top[2],
++						   balance_cal.left_bottom[0],
++						   balance_cal.left_bottom[1],
++						   balance_cal.left_bottom[2]);
++				}
++				break;
+ 			default:
+ 				printf("Unknown Extension");
+ 				break;
+@@ -355,6 +387,14 @@
+ 			       mesg[i].classic_mesg.r_stick[CWIID_Y],
+ 			       mesg[i].classic_mesg.l, mesg[i].classic_mesg.r);
+ 			break;
++		case CWIID_MESG_BALANCE:
++			printf("Balance Report: right_top=%d right_bottom=%d "
++			       "left_top=%d left_bottom=%d\n",
++			       mesg[i].balance_mesg.right_top,
++			       mesg[i].balance_mesg.right_bottom,
++			       mesg[i].balance_mesg.left_top,
++			       mesg[i].balance_mesg.left_bottom);
++			break;
+ 		case CWIID_MESG_ERROR:
+ 			if (cwiid_close(wiimote)) {
+ 				fprintf(stderr, "Error on wiimote disconnect\n");
